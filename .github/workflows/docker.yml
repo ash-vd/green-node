@@ -1,0 +1,63 @@
+name: Build and push Docker image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - bin/**
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  BINARY: bin/green-node_linux-amd64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # ghcr.io image names must be lowercase.
+      - name: Set image name
+        run: echo "IMAGE=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      # The runner is linux/amd64, so the node binary can report its own version.
+      - name: Read node version
+        id: version
+        run: |
+          chmod +x "$BINARY"
+          output=$("$BINARY" version)
+          echo "$output"
+          version=$(echo "$output" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*' | head -n1)
+          if [ -z "$version" ]; then
+            echo "Could not read version from $BINARY" >&2
+            exit 1
+          fi
+          echo "Node version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
